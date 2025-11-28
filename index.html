@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ultimate Weather App — Pro</title>
+
+  <!-- Leaflet for map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+
+  <style>
+    :root{--bg1:#4facfe;--bg2:#00f2fe;--glass:rgba(255,255,255,0.08)}
+    *{box-sizing:border-box}
+    body{font-family:Inter,Arial,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--bg1),var(--bg2));transition:background .6s}
+    .container{width:780px;max-width:96%;background:rgba(255,255,255,0.06);padding:18px;border-radius:14px;backdrop-filter:blur(8px);color:#fff;display:grid;grid-template-columns:1fr 360px;gap:14px}
+
+    /* Left column */
+    .left{display:flex;flex-direction:column;gap:10px}
+    .controls{display:flex;gap:8px}
+    .search-wrap{position:relative;flex:1}
+    input[type=search]{width:100%;padding:10px;border-radius:10px;border:0;background:var(--glass);color:#fff}
+    .suggestions{position:absolute;left:0;right:0;top:44px;background:rgba(0,0,0,0.6);border-radius:8px;overflow:hidden;max-height:220px;overflow-y:auto;z-index:20}
+    .suggestions div{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer}
+    .suggestions div:hover{background:rgba(255,255,255,0.03)}
+    button{padding:10px 12px;border-radius:10px;border:0;cursor:pointer;background:#fff;color:#222}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.12);color:#fff}
+
+    .card{background:rgba(255,255,255,0.04);padding:12px;border-radius:12px}
+    .current{display:flex;align-items:center;justify-content:space-between}
+    .current .info{max-width:58%}
+    .temp{font-size:40px;font-weight:800}
+    .meta{opacity:0.9}
+
+    /* hourly/forecast */
+    .hourly{display:flex;gap:8px;overflow:auto;padding-top:8px}
+    .hourly .item{min-width:76px;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;text-align:center}
+    .forecast-grid{display:flex;gap:8px;margin-top:8px}
+    .forecast-day{flex:1;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;text-align:center}
+
+    /* right column */
+    .right{display:flex;flex-direction:column;gap:8px}
+    #map{height:340px;border-radius:12px;overflow:hidden}
+    .fav-list{display:flex;flex-direction:column;gap:6px}
+    .fav-item{display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,0.03);border-radius:8px}
+
+    /* AQI badge */
+    .aqi{font-weight:700;padding:8px;border-radius:8px}
+
+    /* small stuff */
+    .small{font-size:13px;opacity:0.9}
+
+    /* animations: rain & snow */
+    .weather-anim{pointer-events:none;position:fixed;left:0;right:0;top:0;bottom:0;z-index:1}
+    .raindrop{position:absolute;width:2px;height:60px;background:rgba(255,255,255,0.12);animation:fall 0.8s linear infinite}
+    @keyframes fall{to{transform:translateY(100vh);opacity:0}}
+    .snowflake{position:absolute;width:6px;height:6px;background:rgba(255,255,255,0.9);border-radius:50%;animation:drift 4s linear infinite}
+    @keyframes drift{to{transform:translateY(100vh) translateX(30px);opacity:0}}
+
+    /* offline badge */
+    .offline{position:fixed;left:12px;bottom:12px;background:#FF6B6B;padding:10px;border-radius:10px;font-weight:700}
+
+    /* responsive */
+    @media (max-width:900px){.container{grid-template-columns:1fr;}.right{order:2}}
+  </style>
+</head>
+<body>
+
+  <div class="container" role="application">
+    <div class="left">
+      <div class="controls">
+        <div class="search-wrap">
+          <input id="search" placeholder="Enter city (e.g. Ludhiana)" autocomplete="off" />
+          <div id="suggestions" class="suggestions" style="display:none"></div>
+        </div>
+        <button id="btnSearch">Search</button>
+        <button id="btnGeo" class="btn-ghost">My Location</button>
+        <button id="btnFav" class="btn-ghost">☆ Add Fav</button>
+      </div>
+
+      <div id="alerts" class="card small"></div>
+
+      <div id="current" class="card current" aria-live="polite"></div>
+
+      <div id="hourly" class="card">
+        <div class="small">Next hours</div>
+        <div class="hourly" id="hourList"></div>
+      </div>
+
+      <div id="forecast" class="card">
+        <div class="small">5-day forecast</div>
+        <div class="forecast-grid" id="forecastGrid"></div>
+      </div>
+
+      <div id="extra" class="card small"></div>
+    </div>
+
+    <aside class="right">
+      <div id="map" class="card"></div>
+
+      <div class="card">
+        <div class="small">Air Quality</div>
+        <div id="aqi" class="aqi"></div>
+      </div>
+
+      <div class="card">
+        <div class="small">Favourites</div>
+        <div class="fav-list" id="favList"></div>
+      </div>
+
+      <div class="card small">
+        <div>Units: <button id="unitToggle">°C</button></div>
+        <div style="margin-top:8px"><button id="clearCache" class="btn-ghost">Clear Cache</button></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="anim" class="weather-anim" aria-hidden="true"></div>
+  <div id="offlineBadge" class="offline" style="display:none">Offline: Showing cached data</div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <script>
+    // ---------- CONFIG ----------
+    const API_KEY = 'b2811ba0f5aff28a920e76d75fe1ee08'; // <-- your key already inserted
+    let isC = true;
+
+    // DOM
+    const el = id=>document.getElementById(id);
+    const search = el('search');
+    const btnSearch = el('btnSearch');
+    const btnGeo = el('btnGeo');
+    const btnFav = el('btnFav');
+    const alertsEl = el('alerts');
+    const currentEl = el('current');
+    const hourList = el('hourList');
+    const forecastGrid = el('forecastGrid');
+    const extraEl = el('extra');
+    const aqiEl = el('aqi');
+    const favList = el('favList');
+    const anim = el('anim');
+    const offlineBadge = el('offlineBadge');
+    const suggestionsEl = el('suggestions');
+
+    // ---------- MAP ----------
+    const map = L.map('map', {zoomControl:false}).setView([20.5937,78.9629],4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
+    let mapMarker = L.marker([0,0]).addTo(map);
+
+    // ---------- FAVS & CACHE ----------
+    function loadFavs(){return JSON.parse(localStorage.getItem('favs')||'[]')}
+    function saveFavs(a){localStorage.setItem('favs',JSON.stringify(a));renderFavs()}
+    function saveCache(city,data){const key=`cache_${city.toLowerCase()}`;localStorage.setItem(key,JSON.stringify({ts:Date.now(),data}));}
+    function loadCache(city){const key=`cache_${city.toLowerCase()}`;const v=localStorage.getItem(key);return v?JSON.parse(v):null}
+
+    function renderFavs(){const arr=loadFavs();favList.innerHTML='';arr.forEach(c=>{
+      const d=document.createElement('div');d.className='fav-item';d.innerHTML=`<div>${c}</div><div><button class='btn-ghost' data-city='${c}'>Open</button> <button data-rem='${c}'>Remove</button></div>`;
+      favList.appendChild(d);
+    });
+    // attach listeners
+    favList.querySelectorAll('[data-city]').forEach(b=>b.addEventListener('click',e=>doSearch(e.target.dataset.city)));
+    favList.querySelectorAll('[data-rem]').forEach(b=>b.addEventListener('click',e=>{const c=e.target.dataset.rem;saveFavs(loadFavs().filter(x=>x!==c))}));
+    }
+
+    renderFavs();
+
+    // ---------- HELPERS ----------
+    function unit(t){return isC?Math.round(t)+"°C":Math.round(t*9/5+32)+"°F"}
+    function showOffline(flag){offlineBadge.style.display=flag?'block':'none'}
+
+    async function fetchJSON(url){
+      try{const res=await fetch(url);if(!res.ok)throw new Error('Network response not ok');return await res.json()}catch(e){throw e}
+    }
+
+    // ---------- GEOCODING / SUGGESTIONS ----------
+    let suggestTimer = null;
+    search.addEventListener('input', (e)=>{
+      const q = e.target.value.trim();
+      if(suggestTimer) clearTimeout(suggestTimer);
+      if(!q){suggestionsEl.style.display='none';return}
+      suggestTimer = setTimeout(()=>fetchSuggestions(q), 300);
+    });
+
+    async function fetchSuggestions(q){
+      try{
+        const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=6&appid=${API_KEY}`;
+        const data = await fetchJSON(url);
+        if(!data || !data.length){suggestionsEl.style.display='none';return}
+        suggestionsEl.innerHTML = data.map(d=>{
+          const name = `${d.name}${d.state?(', '+d.state):''}, ${d.country}`;
+          return `<div data-lat='${d.lat}' data-lon='${d.lon}' data-name='${name}'>${name}</div>`;
+        }).join('');
+        suggestionsEl.style.display='block';
+        // attach
+        suggestionsEl.querySelectorAll('div').forEach(el=>el.addEventListener('click', ()=>{
+          const name = el.dataset.name; const lat = el.dataset.lat; const lon = el.dataset.lon;
+          search.value = name; suggestionsEl.style.display='none';
+          doSearchByCoords(lat, lon, name);
+        }));
+      }catch(err){console.warn('suggest',err);suggestionsEl.style.display='none'}
+    }
+
+    // hide suggestions if clicked outside
+    document.addEventListener('click', (e)=>{ if(!document.querySelector('.search-wrap').contains(e.target)) suggestionsEl.style.display='none'; });
+
+    // ---------- CORE: search & render (use geocoding first for reliability) ----------
+    async function doSearch(rawCity){
+      const q = (rawCity||search.value||'').trim(); if(!q) return alert('Enter a city');
+      // attempt to geocode first (direct geocoding supports names like 'Ludhiana')
+      try{
+        const geoUrl = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=1&appid=${API_KEY}`;
+        const geo = await fetchJSON(geoUrl);
+        if(!geo || !geo.length) throw new Error('City not found');
+        const place = geo[0];
+        const lat = place.lat, lon = place.lon;
+        search.value = `${place.name}${place.state?(', '+place.state):''}, ${place.country}`;
+        return doSearchByCoords(lat, lon, search.value);
+      }catch(err){
+        // fallback: if cache exists
+        const cached = loadCache(q);
+        if(cached){ showOffline(true); renderCached(cached.data); }
+        else { alertsEl.textContent = 'Error fetching data: ' + err.message; }
+      }
+    }
+
+    async function doSearchByCoords(lat, lon, displayName){
+      alertsEl.textContent=''; currentEl.innerHTML=''; hourList.innerHTML=''; forecastGrid.innerHTML=''; extraEl.textContent=''; aqiEl.textContent=''; anim.innerHTML=''; showOffline(false);
+      try{
+        const cur = await fetchJSON(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`);
+        renderCurrent(cur);
+
+        const forecast = await fetchJSON(`https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`);
+        renderHourly(forecast);
+        renderForecast(forecast);
+
+        const aqi = await fetchJSON(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`);
+        renderAQI(aqi);
+
+        // try alerts via One Call 3.0
+        try{ const one = await fetchJSON(`https://api.openweathermap.org/data/3.0/onecall?lat=${lat}&lon=${lon}&appid=${API_KEY}`); renderAlerts(one); }catch(e){}
+
+        // update map & cache
+        map.setView([lat, lon], 9); mapMarker.setLatLng([lat, lon]);
+        const cacheKey = (displayName||lat+','+lon).toLowerCase(); saveCache(cacheKey,{cur,forecast,aqi});
+      }catch(err){
+        console.warn('fetch coords',err);
+        const cached = loadCache((displayName||'').toLowerCase());
+        if(cached){ showOffline(true); renderCached(cached.data); }
+        else { alertsEl.textContent = 'Error fetching data: ' + err.message; }
+      }
+    }
+
+    function renderCached(d){if(!d) return;renderCurrent(d.cur);renderHourly(d.forecast);renderForecast(d.forecast);renderAQI(d.aqi)}
+
+    function renderCurrent(cur){
+      map.setView([cur.coord.lat,cur.coord.lon],8);
+      mapMarker.setLatLng([cur.coord.lat,cur.coord.lon]);
+
+      currentEl.innerHTML = `
+        <div class='info'>
+          <div style='display:flex;justify-content:space-between;align-items:center'><div><h3 style='margin:0'>${cur.name}, ${cur.sys.country}</h3><div class='small'>${new Date(cur.dt*1000).toLocaleString()}</div></div><div style='text-align:center'><img src='https://openweathermap.org/img/wn/${cur.weather[0].icon}@2x.png' alt=''></div></div>
+          <div style='height:8px'></div>
+          <div class='temp'>${unit(cur.main.temp)}</div>
+          <div class='meta'>${cur.weather[0].description} • Feels like ${unit(cur.main.feels_like)}</div>
+        </div>
+      `;
+
+      extraEl.innerHTML = `<div class='small'>Pressure: ${cur.main.pressure} hPa • Wind: ${cur.wind.speed} m/s • Visibility: ${(cur.visibility/1000)||'N/A'} km</div>`;
+
+      // animation
+      triggerAnimation(cur.weather[0].main.toLowerCase());
+    }
+
+    function renderHourly(forecast){
+      hourList.innerHTML = '';
+      forecast.list.slice(0,12).forEach(i=>{
+        const d = document.createElement('div');d.className='item';d.innerHTML=`<div class='small'>${i.dt_txt.slice(11,16)}</div><div><img src='https://openweathermap.org/img/wn/${i.weather[0].icon}.png'></div><div class='small'>${unit(i.main.temp)}</div>`;
+        hourList.appendChild(d);
+      });
+    }
+
+    function renderForecast(forecast){
+      const days = {};
+      forecast.list.forEach(item=>{const k=item.dt_txt.slice(0,10);(days[k]=days[k]||[]).push(item)});
+      forecastGrid.innerHTML='';
+      Object.keys(days).slice(0,5).forEach(k=>{
+        const arr=days[k];const avg = Math.round(arr.reduce((a,b)=>a+b.main.temp,0)/arr.length);
+        const mid = arr[Math.floor(arr.length/2)];
+        const d = document.createElement('div');d.className='forecast-day';d.innerHTML=`<div class='small'>${new Date(k).toLocaleDateString(undefined,{weekday:'short'})}</div><div><img src='https://openweathermap.org/img/wn/${mid.weather[0].icon}.png'></div><div style='font-weight:700'>${unit(avg)}</div><div class='small'>${mid.weather[0].main}</div>`;
+        forecastGrid.appendChild(d);
+      });
+    }
+
+    function renderAQI(aqi){
+      const v = aqi.list && aqi.list[0] && aqi.list[0].main ? aqi.list[0].main.aqi : null;
+      const labels = ['Good','Fair','Moderate','Poor','Hazardous'];
+      aqiEl.textContent = v ? `${labels[v-1]} (AQI ${v})` : 'No AQI data';
+    }
+
+    function renderAlerts(one){
+      if(!one || !one.alerts || !one.alerts.length){alertsEl.textContent='No alerts';return}
+      alertsEl.innerHTML = '<strong>Alerts:</strong>' + one.alerts.map(a=>`<div style="margin-top:6px"><strong>${a.event}</strong><div class="small">${a.description}</div></div>`).join('');
+    }
+
+    // ---------- Animation control ----------
+    function triggerAnimation(desc){anim.innerHTML='';if(!desc) return;desc=desc.toLowerCase();if(desc.includes('rain')||desc.includes('drizzle')) createRain(40);else if(desc.includes('snow')) createSnow(30);}
+    function createRain(n){for(let i=0;i<n;i++){const r=document.createElement('div');r.className='raindrop';r.style.left=Math.random()*100+'%';r.style.animationDuration=0.6+Math.random()*0.8+'s';r.style.opacity=0.2+Math.random()*0.8;anim.appendChild(r)}}
+    function createSnow(n){for(let i=0;i<n;i++){const s=document.createElement('div');s.className='snowflake';s.style.left=Math.random()*100+'%';s.style.animationDuration=3+Math.random()*3+'s';s.style.opacity=0.6+Math.random()*0.4;anim.appendChild(s)}}
+
+    // ---------- Offline & cache control ----------
+    window.addEventListener('online',()=>{showOffline(false)});
+    window.addEventListener('offline',()=>{showOffline(true)});
+
+    el('clearCache').addEventListener('click',()=>{Object.keys(localStorage).forEach(k=>{if(k.startsWith('cache_')) localStorage.removeItem(k)});alert('Cache cleared')});
+
+    // ---------- Unit toggle ----------
+    el('unitToggle').addEventListener('click',()=>{
+      isC = !isC;
+      el('unitToggle').textContent = isC ? '°C' : '°F';
+      // re-render current display if data exists
+      const lastCity = search.value.trim();
+      if(lastCity) doSearch(lastCity);
+    });
+
+    // ---------- Favourites button ----------
+    btnFav.addEventListener('click',()=>{
+      const city = (search.value||'').trim(); if(!city) return alert('Enter city to add');
+      const arr = loadFavs(); if(!arr.includes(city)){arr.push(city);saveFavs(arr)}
+    });
+
+    // ---------- Bind search & geo ----------
+    btnSearch.addEventListener('click',()=>doSearch());
+    search.addEventListener('keypress',e=>{if(e.key==='Enter') doSearch()});
+
+    btnGeo.addEventListener('click',()=>navigator.geolocation.getCurrentPosition(async pos=>{
+      const lat=pos.coords.latitude, lon=pos.coords.longitude;
+      try{
+        const cur = await fetchJSON(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`);
+        search.value = cur.name; doSearch(cur.name);
+      }catch(e){alert('Unable to fetch location weather')}
+    },()=>alert('Location denied')));
+
+    // ---------- Initial demo city ----------
+    (function init(){
+      const demo = 'Ludhiana'; search.value = demo; if(navigator.onLine) doSearch(demo); else {const c=loadCache(demo);if(c) renderCached(c.data);}
+    })();
+
+  </script>
+</body>
+</html>
